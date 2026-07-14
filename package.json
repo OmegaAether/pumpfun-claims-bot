@@ -4,7 +4,7 @@
   "mcpName": "io.github.nirholas/pumpfun-claims-bot",
   "description": "PumpFun on-chain intelligence — Telegram feed + MCP server for AI assistants. Query token data, GitHub social fee claims, creator profiles, and more.",
   "type": "module",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "author": "nirholas",
   "repository": {
     "type": "git",

@@ -694,10 +694,4 @@ Found a vulnerability? Please report it responsibly — see [SECURITY.md](SECURI
 
 ## License
 
-[MIT](LICENSE) — free for personal and commercial use.
-
----
-
-<p align="center">
-  <sub>Built with ❤️ for the PumpFun community</sub>
-</p>
+All rights reserved. See [LICENSE](LICENSE).
