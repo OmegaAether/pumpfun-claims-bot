@@ -43,6 +43,8 @@ Every GitHub social fee claim card includes:
 
 | Feature | Description |
 |---------|-------------|
+| **🟢 Credibility Score** | Deterministic 0-100 verdict (Strong/Moderate/Caution/High Risk) synthesised from every trust signal, with a transparent ±factor breakdown |
+| **📊 Dev Track Record** | Persistent per-developer reputation — a repeat dev's prior tokens and their average credibility, so a serial fee-farmer whose newest coin looks clean is exposed on sight |
 | **🚨 First-Time Alert** | `🚨🚨🚨 FIRST TIME CLAIM` banner when a GitHub user claims for the first time ever |
 | **⚠️ Fake Claim Detection** | Detects when `claim_social_fee_pda` instruction is called but no fees are actually paid out |
 | **📊 Claim Counter** | Sequential claim number tracked persistently across restarts |
@@ -72,6 +74,31 @@ Combines GitHub and X/Twitter follower data to classify claimers:
 | **Notable** | ⭐ Notable | ≥ 1K | ≥ 100 |
 
 Either threshold triggers the tier — a user with 50K X followers and 50 GitHub followers still qualifies as **Influencer**.
+
+### Credibility Score & Dev Track Record
+
+Every claim card leads with a **deterministic 0-100 credibility verdict** synthesised from the trust signals the bot already gathers, plus the claiming dev's **persistent track record** across prior tokens.
+
+The score is deterministic and transparent — same inputs always produce the same number, no model call, and every point is attributed to a named factor shown under the headline:
+
+| Tier | Badge | Score |
+|------|-------|-------|
+| **Strong** | 🟢 | 75-100 |
+| **Moderate** | 🟡 | 55-74 |
+| **Caution** | 🟠 | 35-54 |
+| **High Risk** | 🔴 | 0-34 |
+
+Scoring starts at a neutral **50** and adjusts by weighted factors: claim verification (`+22`, or `-20` on a GitHub-owner mismatch), account age (`+14` for 5y+ down to `-18` for < 30 days), public repos, followers, starred non-fork repo, copycats (`-10`/`-16`), bundling, holder concentration, prior rugs, and bans.
+
+**Dev track record** turns that one-shot score into memory. Every score is recorded against the claiming GitHub user id and persisted, so the next time that dev launches a token the card shows their history — exposing a serial fee-farmer whose newest coin looks clean, and crediting a builder with a real record:
+
+```
+🟢 Credibility: 100/100 · Strong
+   ↑ claim verified · GitHub 6y · 42 repos · repo 150★
+📊 Dev track record: 3 prior tokens · avg 🔴 19/100 (High Risk)
+```
+
+Logic lives in [`src/credibility.ts`](src/credibility.ts) (pure `scoreCredibility`) and [`src/dev-reputation.ts`](src/dev-reputation.ts) (persistent store), both fully covered by tests.
 
 ### AI-Powered Claim Summaries
 

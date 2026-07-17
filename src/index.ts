@@ -21,6 +21,8 @@ import { fetchGitHubUserById, fetchRepoFromUrls } from './github-client.js';
 import { fetchXProfile } from './x-client.js';
 import { formatGitHubClaimFeed, formatCreatorClaimFeed, formatGraduationFeed, sanitiseHtml } from './formatters.js';
 import type { ClaimFeedContext, CreatorClaimContext } from './formatters.js';
+import { scoreCredibility } from './credibility.js';
+import { loadDevReputation, flushDevReputation, getReputation, recordClaim } from './dev-reputation.js';
 import { log, setLogLevel } from './logger.js';
 import { startHealthServer, stopHealthServer } from './health.js';
 import { startMcpHttpServer } from './mcp-server.js';
@@ -32,7 +34,10 @@ async function main(): Promise<void> {
     setLogLevel(config.logLevel);
 
     // Load persisted first-claim set to survive restarts
-    if (config.feed.claims) loadPersistedClaims();
+    if (config.feed.claims) {
+        loadPersistedClaims();
+        loadDevReputation();
+    }
 
     log.info('PumpFun Channel Bot starting...');
     log.info('  Channel: %s', config.channelId);
@@ -331,6 +336,20 @@ async function main(): Promise<void> {
 
             const claimNumber = incrementGithubClaimCount(event.githubUserId, mint);
             const claimedMints = getGithubUserClaimedMints(event.githubUserId);
+
+            // Credibility is computed once here (so we can both display it and
+            // record it), and the dev's prior track record is looked up before
+            // this claim gets folded into it.
+            const credibility = scoreCredibility({
+                githubUser,
+                repoInfo,
+                creatorProfile,
+                holders,
+                bundle,
+                sameNameTokens,
+                tokenInfo,
+            });
+            const reputation = getReputation(event.githubUserId, mint);
             log.info('🚨 GitHub social fee FIRST claim by %s (%s) — %s SOL',
                 event.githubUserId, githubUser?.login ?? '?', event.amountSol.toFixed(4));
 
@@ -356,6 +375,8 @@ async function main(): Promise<void> {
                 sameNameTokens,
                 allLinkedTokens: allLinkedTokens.length > 0 ? allLinkedTokens : undefined,
                 claimedMints: claimedMints.length > 0 ? claimedMints : undefined,
+                credibility,
+                reputation,
             };
 
             const { imageUrl, caption } = formatGitHubClaimFeed(ctx);
@@ -374,9 +395,13 @@ async function main(): Promise<void> {
                 // If the process restarts within the debounce window the state
                 // must already be persisted so we don't double-post.
                 flushPersistedClaims();
+                // Fold this claim's score into the dev's persistent track record
+                // so the next token they launch shows their history.
+                recordClaim(event.githubUserId, mint, credibility.score);
+                flushDevReputation();
                 pipeline.posted++;
-                log.info('✅ Posted GitHub claim by %s (%s) to %s',
-                    event.githubUserId, githubUser?.login ?? '?', config.channelId);
+                log.info('✅ Posted GitHub claim by %s (%s) — credibility %d/100 to %s',
+                    event.githubUserId, githubUser?.login ?? '?', credibility.score, config.channelId);
             } catch (postErr) {
                 log.error('Failed to post claim by %s — will retry on next claim event: %s',
                     event.githubUserId, postErr);
@@ -517,6 +542,7 @@ async function main(): Promise<void> {
         eventMonitor?.stop();
         stopHealthServer();
         mcpClose?.();
+        flushDevReputation();
         process.exit(0);
     };
 

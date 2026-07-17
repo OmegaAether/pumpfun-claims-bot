@@ -16,6 +16,8 @@ import type {
 } from './types.js';
 import type { XProfile } from './x-client.js';
 import { getInfluencerTier, formatFollowerCount, influencerLabel } from './x-client.js';
+import { scoreCredibility, TIER_META, type CredibilityResult } from './credibility.js';
+import type { DevReputation } from './dev-reputation.js';
 
 // ============================================================================
 // GitHub Social Fee Claim Card
@@ -56,6 +58,10 @@ export interface ClaimFeedContext {
     allLinkedTokens?: TokenInfo[] | null;
     /** Mints of all coins this GitHub user has previously claimed fees from. */
     claimedMints?: string[];
+    /** Precomputed credibility verdict (index.ts computes it once and records it). */
+    credibility?: CredibilityResult;
+    /** The dev's track record from prior tokens (null on first sighting). */
+    reputation?: DevReputation | null;
 }
 
 /**
@@ -81,6 +87,30 @@ export function formatGitHubClaimFeed(ctx: ClaimFeedContext): { imageUrl: string
         xProfile?.followers ?? null,
     );
     if (tier) L.push(influencerLabel(tier));
+
+    // ━━ CREDIBILITY VERDICT + DEV TRACK RECORD ━━━━━━━━━━
+    // Deterministic, transparent 0-100 read on this claim, plus the dev's
+    // history across prior tokens — a clean-looking coin from a serial
+    // fee-farmer gets exposed here, and a proven builder gets credited.
+    const cred = ctx.credibility ?? scoreCredibility(ctx);
+    if (cred.factors.length > 0) {
+        const meta = TIER_META[cred.tier];
+        L.push(`${meta.emoji} <b>Credibility: ${cred.score}/100</b> · ${meta.label}`);
+        const pos = cred.factors.filter(f => f.delta > 0).slice(0, 4).map(f => esc(f.label));
+        const neg = cred.factors.filter(f => f.delta < 0).slice(0, 4).map(f => esc(f.label));
+        if (pos.length > 0) L.push(`   ↑ ${pos.join(' · ')}`);
+        if (neg.length > 0) L.push(`   ↓ ${neg.join(' · ')}`);
+    }
+    if (ctx.reputation) {
+        const rep = ctx.reputation;
+        const rm = TIER_META[rep.tier];
+        const plural = rep.priorTokens === 1 ? 'token' : 'tokens';
+        L.push(
+            `📊 <b>Dev track record</b>: ${rep.priorTokens} prior ${plural} · avg ${rm.emoji} ${rep.avgScore}/100 (${rm.label})`,
+        );
+    } else if (githubUser) {
+        L.push(`🆕 First token we’ve tracked from this dev.`);
+    }
     L.push('');
 
     // ━━ CA (CONTRACT ADDRESS) ━━━━━━━━━━━━━━━━━━━━━━━━━━━
