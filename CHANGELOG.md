@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **GitHub-only channel no longer posts ordinary creator-fee claims.** `REQUIRE_GITHUB` was declared but never wired, so Path B (`collect_creator_fee` / `collect_coin_creator_fee` / `distribute_creator_fees`) posted generic PumpSwap "Creator Claimed Fees" cards to the GitHub-claims channel — unrelated devs and images the channel was never meant to show. Creator-fee routing is now gated on `REQUIRE_GITHUB` (default `true`): these claims are counted for diagnostics (`… creator-suppressed` in the pipeline line) but never posted. Decision extracted to a pure, tested `src/claim-routing.ts` (`isCreatorClaimType`, `shouldPostCreatorClaim`). Set `REQUIRE_GITHUB=false` to run a general creator-fee feed on a different channel.
+- **State persistence on the container host.** The bot runs as non-root `bot` (uid 100); the mounted data volume was root-owned, so poll cursors, the first-claim dedup, and the dev-reputation store failed to write (`EACCES`) and reset on every restart. The deploy now `chown`s the data dir to the container user.
+
 ### Added
 
 - **Credibility Score** — every claim card now leads with a deterministic 0-100 verdict (🟢 Strong / 🟡 Moderate / 🟠 Caution / 🔴 High Risk) synthesised from all trust signals (claim verification, GitHub account age/repos/followers, claimed-repo stars & fork status, copycats, bundling, holder concentration, creator rug history), with a transparent ±factor breakdown. Pure, fully-tested logic in `src/credibility.ts`.

@@ -20,6 +20,7 @@ import { fetchTokenInfo, fetchTopHolders, fetchTokenTrades, fetchDevWalletInfo, 
 import { fetchGitHubUserById, fetchRepoFromUrls } from './github-client.js';
 import { fetchXProfile } from './x-client.js';
 import { formatGitHubClaimFeed, formatCreatorClaimFeed, formatGraduationFeed, sanitiseHtml } from './formatters.js';
+import { isCreatorClaimType, shouldPostCreatorClaim } from './claim-routing.js';
 import type { ClaimFeedContext, CreatorClaimContext } from './formatters.js';
 import { scoreCredibility } from './credibility.js';
 import { loadDevReputation, flushDevReputation, getReputation, recordClaim } from './dev-reputation.js';
@@ -43,9 +44,12 @@ async function main(): Promise<void> {
     log.info('  Channel: %s', config.channelId);
     log.info('  RPC: %s', maskUrl(config.solanaRpcUrl));
     const feeds: string[] = [];
-    if (config.feed.claims) feeds.push('claims');
+    if (config.feed.claims) feeds.push(config.requireGithub ? 'github-social-claims (first-only)' : 'claims (github + creator)');
     if (config.feed.graduations) feeds.push('graduations');
     log.info('  Feeds: %s', feeds.join(', ') || 'none');
+    if (config.feed.claims && config.requireGithub) {
+        log.info('  GitHub-only mode: creator-fee claims are suppressed (REQUIRE_GITHUB=true).');
+    }
 
     const bot = new Bot(config.telegramToken);
 
@@ -127,10 +131,10 @@ async function main(): Promise<void> {
     }
 
     // ── Pipeline Counters ─────────────────────────────────────────────
-    const pipeline = { total: 0, socialClaims: 0, creatorClaims: 0, firstClaim: 0, posted: 0, skippedCashback: 0, repeatClaim: 0 };
+    const pipeline = { total: 0, socialClaims: 0, creatorClaims: 0, firstClaim: 0, posted: 0, skippedCashback: 0, repeatClaim: 0, suppressedCreator: 0 };
     setInterval(() => {
-        log.info('Pipeline: %d total → %d social + %d creator → %d first / %d repeat → %d posted (skip: %d cashback)',
-            pipeline.total, pipeline.socialClaims, pipeline.creatorClaims, pipeline.firstClaim, pipeline.repeatClaim, pipeline.posted, pipeline.skippedCashback);
+        log.info('Pipeline: %d total → %d social + %d creator → %d first / %d repeat → %d posted (skip: %d cashback, %d creator-suppressed)',
+            pipeline.total, pipeline.socialClaims, pipeline.creatorClaims, pipeline.firstClaim, pipeline.repeatClaim, pipeline.posted, pipeline.skippedCashback, pipeline.suppressedCreator);
     }, 60_000);
 
     // ── Claim Monitor ────────────────────────────────────────────────
@@ -409,10 +413,22 @@ async function main(): Promise<void> {
         }
 
         // ── Path B: Creator fee claims (collect_creator_fee, collect_coin_creator_fee, distribute_creator_fees) ──
-        else if (event.claimType === 'collect_creator_fee' ||
-                 event.claimType === 'collect_coin_creator_fee' ||
-                 (event.claimType === 'distribute_creator_fees' && config.feed.feeDistributions)) {
+        // These are ordinary PumpSwap creator-fee collections — NOT GitHub-linked
+        // claims. This channel exists only to surface first-ever GitHub social-fee
+        // claims (Path A), so when REQUIRE_GITHUB is on (the default and this
+        // channel's whole purpose) they are counted for diagnostics but NEVER
+        // posted. Flip REQUIRE_GITHUB=false to run a general creator-fee feed on
+        // a different channel.
+        else if (isCreatorClaimType(event.claimType)) {
             pipeline.creatorClaims++;
+
+            if (!shouldPostCreatorClaim(event.claimType, {
+                requireGithub: config.requireGithub,
+                feeDistributions: config.feed.feeDistributions,
+            })) {
+                if (config.requireGithub) pipeline.suppressedCreator++;
+                return; // GitHub-only channel (or gated distribution): not posted.
+            }
 
             const mint = event.tokenMint?.trim() || '';
             const [tokenInfo, solUsdPrice, creator] = await Promise.all([
