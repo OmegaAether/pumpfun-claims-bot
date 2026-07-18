@@ -44,6 +44,10 @@ const MAX_QUEUE_SIZE = 50;
 const RATE_LIMIT_LOG_WINDOW_MS = 30_000;
 const WS_HEARTBEAT_INTERVAL_MS = 60_000;
 const WS_HEARTBEAT_TIMEOUT_MS = 90_000;
+// After this many heartbeat reconnects with zero new events, abandon the
+// WebSocket and fall back to polling (the pump programs are always active, so
+// sustained silence means the socket is dead, not the feed quiet).
+const WS_MAX_SILENT_RECONNECTS = 3;
 
 // Persistence for poll cursor (survives restarts so already-seen txs aren't re-processed)
 const DATA_DIR = process.env.DATA_DIR || join(process.cwd(), 'data');
@@ -134,6 +138,12 @@ export class ClaimMonitor {
     private lastWsEventTime = 0;
     private wsHeartbeatTimer?: ReturnType<typeof setInterval>;
     private wsEventsReceived = 0;
+    // Silent-reconnect guard: a dead-but-connected WS (e.g. a silently
+    // rate-limited endpoint) never throws, so the heartbeat would reconnect it
+    // forever. Count reconnects that produced zero new events and give up to
+    // polling after WS_MAX_SILENT_RECONNECTS.
+    private wsEventsAtLastReconnect = 0;
+    private wsSilentReconnects = 0;
     private claimTxProcessed = 0;
     private claimsByType = new Map<string, number>();
     private socialFeeIndex = new SocialFeeIndex();
@@ -356,6 +366,14 @@ export class ClaimMonitor {
 
     private reconnectWebSocket(): void {
         if (!this.isRunning) return;
+
+        // Track whether the last cycle produced any events. A dead-but-connected
+        // socket never throws (startWebSocket resolves fine), so without this the
+        // heartbeat would reconnect it forever and never fall back.
+        if (this.wsEventsReceived === this.wsEventsAtLastReconnect) this.wsSilentReconnects++;
+        else this.wsSilentReconnects = 0;
+        this.wsEventsAtLastReconnect = this.wsEventsReceived;
+
         // Clean up old connection
         if (this.wsConnection) {
             for (const id of this.wsSubscriptionIds) {
@@ -364,6 +382,18 @@ export class ClaimMonitor {
             this.wsSubscriptionIds = [];
         }
         this.wsConnection = undefined;
+
+        // Dead WS across repeated reconnects → stop looping, fall back to polling.
+        if (this.wsSilentReconnects >= WS_MAX_SILENT_RECONNECTS) {
+            log.warn('Claim monitor WS dead across %d reconnects (0 events) — falling back to polling',
+                this.wsSilentReconnects);
+            if (this.wsHeartbeatTimer) {
+                clearInterval(this.wsHeartbeatTimer);
+                this.wsHeartbeatTimer = undefined;
+            }
+            this.startPolling();
+            return;
+        }
 
         this.startWebSocket().catch((err) => {
             log.warn('Claim monitor WS reconnect failed, falling back to polling: %s', err);
