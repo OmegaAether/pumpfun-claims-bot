@@ -48,6 +48,9 @@ const WS_HEARTBEAT_TIMEOUT_MS = 90_000;
 // WebSocket and fall back to polling (the pump programs are always active, so
 // sustained silence means the socket is dead, not the feed quiet).
 const WS_MAX_SILENT_RECONNECTS = 3;
+// GitHub-only mode never falls back to polling (the PumpFees firehose can't be
+// polled), so a failed WS reconnect is retried on this backoff instead.
+const WS_RETRY_BACKOFF_MS = 15_000;
 
 // Persistence for poll cursor (survives restarts so already-seen txs aren't re-processed)
 const DATA_DIR = process.env.DATA_DIR || join(process.cwd(), 'data');
@@ -159,12 +162,20 @@ export class ClaimMonitor {
         if (config.solanaRpcUrls.length > 1) {
             log.info('Claim monitor: %d RPC endpoints configured (fallback enabled)', config.solanaRpcUrls.length);
         }
-        // Monitor all three programs: PumpFees (social fee PDA), Pump (creator fees), PumpAMM (coin creator fees)
-        this.programPubkeys = [
-            new PublicKey(PUMP_FEE_PROGRAM_ID),
-            new PublicKey(PUMP_PROGRAM_ID),
-            new PublicKey(PUMP_AMM_PROGRAM_ID),
-        ];
+        // GitHub social-fee claims (claim_social_fee_pda) live ONLY on the PumpFees
+        // program. On a GitHub-only channel (REQUIRE_GITHUB, the default) that is the
+        // only program worth watching — Pump and PumpAMM carry creator/coin-creator
+        // fee claims that are suppressed anyway, and subscribing to those two
+        // firehoses (~100 tx/s each) is what drowns the RPC in getTransaction calls
+        // and 429s, starving the rare social claim we actually care about. Watch all
+        // three only when creator-fee claims are also being posted.
+        this.programPubkeys = config.requireGithub
+            ? [new PublicKey(PUMP_FEE_PROGRAM_ID)]
+            : [
+                  new PublicKey(PUMP_FEE_PROGRAM_ID),
+                  new PublicKey(PUMP_PROGRAM_ID),
+                  new PublicKey(PUMP_AMM_PROGRAM_ID),
+              ];
         this.rpcQueue = new RpcQueue((sig) => this.processTransaction(sig));
     }
 
@@ -277,7 +288,17 @@ export class ClaimMonitor {
             log.warn('SocialFeeIndex bootstrap error: %s', err);
         });
 
-        if (this.config.solanaWsUrl && process.env.SOLANA_WS_URL) {
+        // A GitHub-only channel MUST use the WebSocket: the PumpFees program is a
+        // ~100 tx/s firehose of mostly cashback claims, and polling it with
+        // getTransaction-per-signature can't keep up (429 storm) and drops the rare
+        // social claim we exist to catch. WS pushes the log lines, so we only fetch
+        // the full transaction when `ClaimSocialFeePda` actually appears. Use the
+        // derived wss endpoint even without an explicit SOLANA_WS_URL here — for this
+        // mode WS is not optional. Non-GitHub (creator-inclusive) mode still requires
+        // the explicit opt-in because that path fans out to more programs.
+        const preferWebSocket =
+            !!this.config.solanaWsUrl && (this.config.requireGithub || !!process.env.SOLANA_WS_URL);
+        if (preferWebSocket) {
             try {
                 await this.startWebSocket();
                 log.info('Claim monitor: WebSocket mode');
@@ -383,19 +404,35 @@ export class ClaimMonitor {
         }
         this.wsConnection = undefined;
 
-        // Dead WS across repeated reconnects → stop looping, fall back to polling.
+        // Dead WS across repeated reconnects. Creator-inclusive mode falls back to
+        // polling; GitHub-only mode cannot (polling the PumpFees firehose can't catch
+        // social claims and just 429-storms), so it keeps retrying the WebSocket.
         if (this.wsSilentReconnects >= WS_MAX_SILENT_RECONNECTS) {
-            log.warn('Claim monitor WS dead across %d reconnects (0 events) — falling back to polling',
-                this.wsSilentReconnects);
-            if (this.wsHeartbeatTimer) {
-                clearInterval(this.wsHeartbeatTimer);
-                this.wsHeartbeatTimer = undefined;
+            if (this.config.requireGithub) {
+                log.warn('Claim monitor WS silent across %d reconnects — retrying WS (polling cannot catch social claims)',
+                    this.wsSilentReconnects);
+                this.wsSilentReconnects = 0;
+            } else {
+                log.warn('Claim monitor WS dead across %d reconnects (0 events) — falling back to polling',
+                    this.wsSilentReconnects);
+                if (this.wsHeartbeatTimer) {
+                    clearInterval(this.wsHeartbeatTimer);
+                    this.wsHeartbeatTimer = undefined;
+                }
+                this.startPolling();
+                return;
             }
-            this.startPolling();
-            return;
         }
 
         this.startWebSocket().catch((err) => {
+            if (this.config.requireGithub) {
+                // No polling fallback for a GitHub-only channel — schedule another WS
+                // attempt (the heartbeat may not be armed if startWebSocket failed early).
+                log.warn('Claim monitor WS reconnect failed: %s — retrying WS in %ds', err,
+                    Math.floor(WS_RETRY_BACKOFF_MS / 1000));
+                setTimeout(() => { if (this.isRunning) this.reconnectWebSocket(); }, WS_RETRY_BACKOFF_MS);
+                return;
+            }
             log.warn('Claim monitor WS reconnect failed, falling back to polling: %s', err);
             if (this.wsHeartbeatTimer) {
                 clearInterval(this.wsHeartbeatTimer);
