@@ -26,7 +26,7 @@
 
 ---
 
-> **Looking for interactive monitoring?** The [telegram-bot](../telegram-bot/) supports watch management, group chats, REST API, SSE streaming, and webhooks. Use this channel-bot for simple broadcast-only channels.
+> **Looking for interactive monitoring?** The [telegram-bot](https://github.com/nirholas/telegram-bot) supports watch management, group chats, REST API, SSE streaming, and webhooks. Use this channel-bot for simple broadcast-only channels.
 
 ## Features
 
