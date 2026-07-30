@@ -6,3 +6,4 @@ data/
 .mcpregistry_*
 mcp-publisher
 .mcp*
+.turbo/

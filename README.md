@@ -363,14 +363,17 @@ See [railway.json](railway.json) for the deployment config:
 ## Project Structure
 
 ```
-channel-bot/
+pumpfun-claims-bot/
 ├── src/
 │   ├── index.ts              # Entry point — wires monitors, enrichment, & Telegram posting
 │   ├── config.ts             # Environment variable loading & validation
 │   ├── mcp-server.ts         # MCP server — exposes tools via Streamable HTTP or stdio
 │   ├── mcp-stdio.ts          # Standalone MCP entry point (stdio transport)
 │   ├── claim-monitor.ts      # PumpFees program monitor (WebSocket + HTTP polling)
+│   ├── claim-routing.ts      # Decides which claims are posted, skipped, or re-routed
 │   ├── claim-tracker.ts      # First-claim detection + claim counter (persisted to disk)
+│   ├── credibility.ts        # Deterministic 0-100 credibility scoring
+│   ├── dev-reputation.ts     # Persistent per-developer track record store
 │   ├── event-monitor.ts      # Pump program log decoder (graduations, launches)
 │   ├── social-fee-index.ts   # SocialFeeIndex — maps SharingConfig PDAs → mints (~148K)
 │   ├── formatters.ts         # Rich HTML card builders for Telegram
@@ -382,6 +385,10 @@ channel-bot/
 │   ├── health.ts             # HTTP health check server
 │   ├── types.ts              # Program IDs, discriminators, event types
 │   └── logger.ts             # Leveled console logger
+├── src/__tests__/            # Vitest suites (203 tests) + shared fixtures
+├── packages/web/             # React dashboard, mock-data build (see Web Dashboard)
+├── web/web/                  # React dashboard, live-SSE build (see Web Dashboard)
+├── leaderboard-bot/          # Separate Telegram bot: GitHub dev earnings leaderboard
 ├── data/                     # Persisted state (gitignored, Railway volume mount)
 │   └── github-first-claims.json
 ├── Dockerfile                # Multi-stage Docker build
@@ -534,7 +541,19 @@ Pipeline: 15 total → 8 social → 3 first / 5 repeat → 8 posted (skip: 7 cas
 
 ## Web Dashboard
 
-A React-based web frontend is included under `packages/web/` with live monitoring capabilities.
+Two React frontends are checked in, and they are not the same app:
+
+| Directory | What it is | Build |
+|---|---|---|
+| `web/web/` | The full dashboard: SSE event stream, watch lists, SEO assets (`robots.txt`, `sitemap.xml`, `llms.txt`). Has its own lockfile, so `npm ci` works. | `cd web/web && npm ci && npm run build` |
+| `packages/web/` | An earlier, smaller copy of the same UI. Its Dashboard renders generated sample events, with no SSE client. | `cd packages/web && npm ci && npm run build` |
+
+The features listed below describe `web/web/`. Both directories build clean today;
+consolidating them onto one is still open work.
+
+Deep links (`/dashboard`, `/docs`, ...) are client-side routes, so any static host
+must rewrite unknown paths to `index.html`. Each app now ships a `vercel.json` with
+that rewrite; on a non-Vercel host, configure the equivalent SPA fallback.
 
 ### Pages
 
@@ -654,7 +673,7 @@ The bot exposes an HTTP health check server for Railway / Docker probes.
 
 ## Testing
 
-The project uses **Vitest** with ~100+ test cases across 6 test suites.
+The project uses **Vitest**: 203 tests across 11 suites, all green on `npm test`.
 
 ```bash
 # Run all tests
@@ -666,12 +685,19 @@ npm run test:watch
 
 ### Test Suites
 
+Every suite lives in `src/__tests__/` (plus `fixtures.ts`, shared sample data).
+
 | Suite | File | Coverage |
 |-------|------|----------|
 | Claim Tracker | `claim-tracker.test.ts` | First-claim detection, persistence, counters, lifetime totals |
+| Claim Routing | `claim-routing.test.ts` | Which claims are posted, skipped, or routed to which feed |
+| Credibility | `credibility.test.ts` | Deterministic 0-100 scoring, per-factor attribution, tier bounds |
+| Dev Reputation | `dev-reputation.test.ts` | Persistent per-developer track record and averages |
 | Formatters | `formatters.test.ts` | HTML card generation, escaping, null handling, edge cases |
 | GitHub Client | `github-client.test.ts` | URL parsing, API response handling, cache behavior |
 | Groq Client | `groq-client.test.ts` | AI summary generation, API key handling, HTML safety |
+| Pump Client | `pump-client.test.ts` | Token, holder, trade, and creator API response handling |
+| RPC Fallback | `rpc-fallback.test.ts` | Round-robin rotation, cooldowns, retryable error handling |
 | X Client | `x-client.test.ts` | Influencer tier classification, follower formatting |
 | E2E Pipeline | `e2e.test.ts` | End-to-end claim tracking, formatting, GitHub feed |
 
