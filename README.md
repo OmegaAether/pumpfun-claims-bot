@@ -748,3 +748,10 @@ Found a vulnerability? Please report it responsibly — see [SECURITY.md](SECURI
 ## License
 
 All rights reserved. See [LICENSE](LICENSE).
+
+## Documentation
+
+Full documentation site: **https://nirholas.github.io/pumpfun-claims-bot/**
+
+- [Getting started](docs/getting-started.md) covers install and first run.
+- [Examples](docs/examples.md) has copy-paste snippets.
