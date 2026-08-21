@@ -622,6 +622,15 @@ export class ClaimMonitor {
                     this.claimsDetected++;
                     const typeCount = (this.claimsByType.get(event.claimType) ?? 0) + 1;
                     this.claimsByType.set(event.claimType, typeCount);
+                    // MIN_CLAIM_SOL filter (Lazarus fork): drop claims below the threshold
+                    // so the channel only surfaces material claims. Set to 0 or unset to
+                    // preserve upstream behavior of posting every claim.
+                    const minClaimSol = Number(process.env.MIN_CLAIM_SOL ?? 0);
+                    if (minClaimSol > 0 && event.amountSol < minClaimSol) {
+                        log.debug('MIN_CLAIM_SOL filter dropped claim: amountSol=%s < %s',
+                            event.amountSol, minClaimSol);
+                        continue;
+                    }
                     this.onClaim(event);
                 }
             }
